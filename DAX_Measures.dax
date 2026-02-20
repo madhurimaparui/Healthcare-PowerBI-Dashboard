@@ -1,0 +1,156 @@
+// ============================================================
+// DAX Measures — Healthcare Data Analysis Dashboard
+// Power BI File: Healthcare_Dashboard.pbix
+// Author: Madhurima Parui
+// ============================================================
+
+
+// ─────────────────────────────────────────────
+// TABLE: _Measures (dedicated measures table)
+// ─────────────────────────────────────────────
+
+
+// ── CORE KPIs ──────────────────────────────────────────────
+
+Total Admissions =
+COUNTROWS(fact_admissions)
+
+Total Revenue =
+SUM(fact_admissions[total_bill])
+
+Total Medication Cost =
+SUM(fact_admissions[medication_cost])
+
+Avg Length of Stay =
+AVERAGE(fact_admissions[length_of_stay])
+
+Avg Bill Per Admission =
+DIVIDE([Total Revenue], [Total Admissions], 0)
+
+Readmission Count =
+CALCULATE(COUNTROWS(fact_admissions), fact_admissions[readmission_flag] = TRUE())
+
+Readmission Rate % =
+DIVIDE([Readmission Count], [Total Admissions], 0) * 100
+
+Mortality Rate % =
+DIVIDE(
+    CALCULATE(COUNTROWS(fact_admissions), fact_admissions[outcome] = "Deceased"),
+    [Total Admissions],
+    0
+) * 100
+
+Recovery Rate % =
+DIVIDE(
+    CALCULATE(COUNTROWS(fact_admissions), fact_admissions[outcome] = "Recovered"),
+    [Total Admissions],
+    0
+) * 100
+
+
+// ── TIME INTELLIGENCE ──────────────────────────────────────
+
+Admissions MTD =
+TOTALMTD([Total Admissions], dim_date[full_date])
+
+Admissions YTD =
+TOTALYTD([Total Admissions], dim_date[full_date])
+
+Admissions PYTD =
+CALCULATE(
+    [Total Admissions],
+    SAMEPERIODLASTYEAR(dim_date[full_date])
+)
+
+YoY Admissions Growth % =
+DIVIDE([Total Admissions] - [Admissions PYTD], [Admissions PYTD], 0) * 100
+
+Revenue MTD =
+TOTALMTD([Total Revenue], dim_date[full_date])
+
+Revenue YTD =
+TOTALYTD([Total Revenue], dim_date[full_date])
+
+Revenue PYTD =
+CALCULATE(
+    [Total Revenue],
+    SAMEPERIODLASTYEAR(dim_date[full_date])
+)
+
+YoY Revenue Growth % =
+DIVIDE([Total Revenue] - [Revenue PYTD], [Revenue PYTD], 0) * 100
+
+Rolling 3 Month Admissions =
+CALCULATE(
+    [Total Admissions],
+    DATESINPERIOD(dim_date[full_date], LASTDATE(dim_date[full_date]), -3, MONTH)
+)
+
+
+// ── DEPARTMENT ANALYSIS ────────────────────────────────────
+
+Top Department by Admissions =
+CALCULATE(
+    FIRSTNONBLANK(dim_department[department_name], 1),
+    TOPN(1,
+        SUMMARIZE(fact_admissions, dim_department[department_name], "Admissions", [Total Admissions]),
+        [Admissions], DESC
+    )
+)
+
+Department Admission Share % =
+DIVIDE([Total Admissions],
+    CALCULATE([Total Admissions], ALL(dim_department)),
+    0
+) * 100
+
+
+// ── DOCTOR PERFORMANCE ─────────────────────────────────────
+
+Avg Patients Per Doctor =
+DIVIDE([Total Admissions],
+    DISTINCTCOUNT(fact_admissions[doctor_id]),
+    0
+)
+
+
+// ── MEDICATION ─────────────────────────────────────────────
+
+Most Prescribed Medication =
+CALCULATE(
+    FIRSTNONBLANK(dim_medication[medication_name], 1),
+    TOPN(1,
+        SUMMARIZE(fact_admissions, dim_medication[medication_name], "Count", COUNTROWS(fact_admissions)),
+        [Count], DESC
+    )
+)
+
+Medication Cost % of Total Bill =
+DIVIDE([Total Medication Cost], [Total Revenue], 0) * 100
+
+
+// ── DYNAMIC TITLE ──────────────────────────────────────────
+
+Report Title =
+"Healthcare Dashboard — " &
+SELECTEDVALUE(dim_date[year], "All Years") & " | " &
+SELECTEDVALUE(dim_department[department_name], "All Departments")
+
+
+// ── CONDITIONAL FORMATTING ─────────────────────────────────
+
+Readmission Rate Color =
+SWITCH(
+    TRUE(),
+    [Readmission Rate %] > 20, "#C00000",   // Red — High
+    [Readmission Rate %] > 10, "#FF8C00",   // Orange — Medium
+    "#00B050"                                // Green — Low
+)
+
+LOS Color =
+SWITCH(
+    TRUE(),
+    [Avg Length of Stay] > 10, "#C00000",
+    [Avg Length of Stay] > 7,  "#FF8C00",
+    "#00B050"
+)

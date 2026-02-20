@@ -1,0 +1,172 @@
+{
+  "name": "PL_Healthcare_Ingestion_Pipeline",
+  "properties": {
+    "description": "Azure Data Factory pipeline to ingest data from SQL Server into Power BI via staging. Orchestrated by Madhurima Parui.",
+    "activities": [
+      {
+        "name": "Lookup_LastRunTimestamp",
+        "type": "Lookup",
+        "description": "Fetch the last successful run timestamp for incremental load",
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT MAX(last_run_timestamp) AS last_run FROM pipeline_control_table WHERE pipeline_name = 'PL_Healthcare_Ingestion_Pipeline'"
+          },
+          "dataset": { "referenceName": "DS_AzureSQL_ControlTable", "type": "DatasetReference" }
+        }
+      },
+      {
+        "name": "Copy_DimPatient",
+        "type": "Copy",
+        "description": "Copy dim_patient from on-premise SQL Server to Azure SQL Staging",
+        "dependsOn": [{ "activity": "Lookup_LastRunTimestamp", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT * FROM dim_patient WHERE updated_at > '@{activity('Lookup_LastRunTimestamp').output.firstRow.last_run}'"
+          },
+          "sink": {
+            "type": "AzureSqlSink",
+            "writeBehavior": "upsert",
+            "upsertSettings": { "useTempDB": true, "keys": ["patient_id"] }
+          },
+          "enableStaging": false
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_DimPatient",  "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_DimPatient",   "type": "DatasetReference" }]
+      },
+      {
+        "name": "Copy_DimDepartment",
+        "type": "Copy",
+        "dependsOn": [{ "activity": "Lookup_LastRunTimestamp", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": { "type": "SqlServerSource", "sqlReaderQuery": "SELECT * FROM dim_department" },
+          "sink":   { "type": "AzureSqlSink",   "writeBehavior": "upsert", "upsertSettings": { "useTempDB": true, "keys": ["department_id"] } }
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_DimDepartment", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_DimDepartment",  "type": "DatasetReference" }]
+      },
+      {
+        "name": "Copy_DimDoctor",
+        "type": "Copy",
+        "dependsOn": [{ "activity": "Lookup_LastRunTimestamp", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": { "type": "SqlServerSource", "sqlReaderQuery": "SELECT * FROM dim_doctor" },
+          "sink":   { "type": "AzureSqlSink",   "writeBehavior": "upsert", "upsertSettings": { "useTempDB": true, "keys": ["doctor_id"] } }
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_DimDoctor", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_DimDoctor",  "type": "DatasetReference" }]
+      },
+      {
+        "name": "Copy_DimMedication",
+        "type": "Copy",
+        "dependsOn": [{ "activity": "Lookup_LastRunTimestamp", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": { "type": "SqlServerSource", "sqlReaderQuery": "SELECT * FROM dim_medication" },
+          "sink":   { "type": "AzureSqlSink",   "writeBehavior": "upsert", "upsertSettings": { "useTempDB": true, "keys": ["medication_id"] } }
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_DimMedication", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_DimMedication",  "type": "DatasetReference" }]
+      },
+      {
+        "name": "Copy_DimDate",
+        "type": "Copy",
+        "dependsOn": [{ "activity": "Lookup_LastRunTimestamp", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": { "type": "SqlServerSource", "sqlReaderQuery": "SELECT * FROM dim_date" },
+          "sink":   { "type": "AzureSqlSink",   "writeBehavior": "upsert", "upsertSettings": { "useTempDB": true, "keys": ["date_id"] } }
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_DimDate", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_DimDate",  "type": "DatasetReference" }]
+      },
+      {
+        "name": "Copy_FactAdmissions",
+        "type": "Copy",
+        "description": "Incremental load of fact_admissions using last run timestamp",
+        "dependsOn": [
+          { "activity": "Copy_DimPatient",    "dependencyConditions": ["Succeeded"] },
+          { "activity": "Copy_DimDepartment", "dependencyConditions": ["Succeeded"] },
+          { "activity": "Copy_DimDoctor",     "dependencyConditions": ["Succeeded"] },
+          { "activity": "Copy_DimMedication", "dependencyConditions": ["Succeeded"] },
+          { "activity": "Copy_DimDate",       "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT * FROM fact_admissions WHERE admission_date_id >= CONVERT(INT, FORMAT(CAST('@{activity('Lookup_LastRunTimestamp').output.firstRow.last_run}' AS DATE),'yyyyMMdd'))"
+          },
+          "sink": {
+            "type": "AzureSqlSink",
+            "writeBehavior": "upsert",
+            "upsertSettings": { "useTempDB": true, "keys": ["admission_id"] }
+          }
+        },
+        "inputs":  [{ "referenceName": "DS_SQLServer_FactAdmissions", "type": "DatasetReference" }],
+        "outputs": [{ "referenceName": "DS_AzureSQL_FactAdmissions",  "type": "DatasetReference" }]
+      },
+      {
+        "name": "Trigger_PowerBI_Refresh",
+        "type": "WebActivity",
+        "description": "Trigger Power BI dataset refresh via REST API after data load completes",
+        "dependsOn": [{ "activity": "Copy_FactAdmissions", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "url": "https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes",
+          "method": "POST",
+          "headers": { "Content-Type": "application/json" },
+          "body": { "notifyOption": "MailOnFailure" },
+          "authentication": {
+            "type": "MSI",
+            "resource": "https://analysis.windows.net/powerbi/api"
+          }
+        }
+      },
+      {
+        "name": "Update_ControlTable",
+        "type": "SqlServerStoredProcedure",
+        "description": "Update last run timestamp after successful pipeline run",
+        "dependsOn": [{ "activity": "Trigger_PowerBI_Refresh", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "storedProcedureName": "sp_update_pipeline_control",
+          "storedProcedureParameters": {
+            "pipeline_name": { "value": "PL_Healthcare_Ingestion_Pipeline", "type": "String" },
+            "last_run_timestamp": { "value": "@utcNow()", "type": "String" }
+          }
+        },
+        "linkedServiceName": { "referenceName": "LS_AzureSQL", "type": "LinkedServiceReference" }
+      }
+    ],
+    "triggers": [
+      {
+        "name": "TR_Healthcare_Daily",
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+          "recurrence": {
+            "frequency": "Day",
+            "interval": 1,
+            "startTime": "2024-01-01T02:00:00Z",
+            "timeZone": "India Standard Time",
+            "schedule": { "hours": [2], "minutes": [0] }
+          }
+        }
+      }
+    ],
+    "linkedServices": [
+      {
+        "name": "LS_SQLServer_OnPremise",
+        "type": "SqlServer",
+        "description": "On-premise SQL Server via Self-Hosted Integration Runtime",
+        "typeProperties": {
+          "connectionString": "Data Source=<YOUR_SERVER>;Initial Catalog=HealthcareDB;Integrated Security=True",
+          "connectVia": { "referenceName": "IR_SelfHosted", "type": "IntegrationRuntimeReference" }
+        }
+      },
+      {
+        "name": "LS_AzureSQL",
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+          "connectionString": "Server=tcp:<your-server>.database.windows.net;Database=HealthcareStaging;Authentication=Active Directory Managed Identity"
+        }
+      }
+    ]
+  }
+}
